@@ -1,0 +1,114 @@
+export const meta = { title: "登录与防刷", description: "邮箱验证码、找回密码、Google / GitHub 登录和防刷措施。", section: "core", order: 4 };
+
+登录基于 Better Auth，配置在 `src/lib/auth.ts`。
+
+## 邮箱注册
+
+1. 用户填邮箱和密码注册。密码至少 8 位，要同时有字母和数字，服务端也会校验。
+2. 系统发一封 6 位验证码邮件。验证码 10 分钟过期，输错 5 次作废，数据库里存的是哈希。
+3. 输入正确后邮箱变为已验证，自动登录并发放注册积分。
+
+没验证的用户尝试登录时，系统会自动再发一封验证码。
+
+用已注册的邮箱再注册，返回结果和正常注册一样，不会建号也不会发验证码，只给邮箱主人发一封提醒。这样别人没法通过注册表单探测哪些邮箱注册过。
+
+要关闭邮箱验证：
+
+```bash
+AUTH_REQUIRE_EMAIL_VERIFICATION=false
+```
+
+线上建议保持开启。注册积分在验证后才发，批量注册就没那么划算。开启时必须配好 Resend，否则用户收不到验证码，注册不了。
+
+## 找回密码
+
+找回密码同样用 6 位验证码，接口是 `/email-otp/request-password-reset` 和 `/email-otp/reset-password`。模板不发重置链接，链接式接口直接返回 404。
+
+下面这些接口也关掉了：
+
+- 验证码直接登录（会绕过注册页的防刷检查）
+- 修改账号邮箱
+
+## Google 和 GitHub 登录
+
+对应的两个变量都配了，登录页才显示按钮。
+
+### Google
+
+1. 打开 Google Cloud Console，进入 **APIs & Services** → **Credentials**，创建 **Web application** 类型的 OAuth 客户端。
+2. 添加授权回调地址：
+
+```text
+http://localhost:3000/api/auth/callback/google
+https://example.com/api/auth/callback/google
+```
+
+3. 配好变量并重启：
+
+```bash
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+BETTER_AUTH_URL=https://example.com
+```
+
+OAuth 同意屏幕处于 **Testing** 状态时只有测试用户能登录，上线前记得发布。
+
+### GitHub
+
+在 `github.com/settings/developers` 创建 OAuth App，回调地址填：
+
+```text
+https://example.com/api/auth/callback/github
+```
+
+然后配置 `GITHUB_CLIENT_ID` 和 `GITHUB_CLIENT_SECRET`。
+
+## 页面保护
+
+`src/proxy.ts` 会把未登录的访客从 `/dashboard`、`/settings`、`/admin` 跳转到登录页。这一层只看有没有登录 cookie，每个页面在服务端还会再校验一次会话。
+
+已登录的普通用户访问 `/admin` 得到 404，不暴露后台的存在。
+
+## 管理员
+
+满足任一条件就是管理员：
+
+- 数据库里 `role` 是 `admin`
+- 邮箱在 `ADMIN_EMAILS` 里，**并且**已验证
+
+用户无法通过修改资料来改 `credits` 或 `role`。
+
+## 防刷
+
+### Turnstile
+
+配好两个密钥后，注册、登录、发验证码、申请重置密码都要先过 Cloudflare Turnstile。
+
+```bash
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=...
+TURNSTILE_SECRET_KEY=...
+```
+
+不要只配秘密密钥：服务端会要求 token，页面却生成不了。本地可用的官方测试密钥写在 `.env.example` 里。
+
+### 限流
+
+计数存在 Postgres，多实例部署也准确，不需要 Redis。默认值在 `src/lib/abuse.ts`。
+
+| 操作 | 默认限制 |
+| --- | --- |
+| 注册 | 每 IP 每小时 20 次 |
+| 登录 | 每 IP 每 10 分钟 20 次 |
+| 发送或输入验证码、重置密码 | 每 IP 每 10 分钟 30 次 |
+| AI 调用 | 每用户每分钟 10 次，每 IP 每分钟 30 次 |
+| 上传 | 每用户每小时 30 次 |
+
+注册限制放得比较宽，因为大量手机用户可能共用一个运营商出口 IP，防批量注册主要靠 Turnstile 和邮箱检查。
+
+### 临时邮箱
+
+已知的一次性邮箱域名（含子域名）不能注册。要补充的话，改 `src/lib/abuse.ts` 里的 `DISPOSABLE_DOMAINS`。
+
+### 封禁
+
+被封禁的用户无论用哪种方式都无法建立新会话。在后台封禁时，已有的会话也会被删除。

@@ -1,0 +1,165 @@
+export const meta = { title: "Payments", description: "Set up Stripe, Creem or Waffo, configure webhooks, and understand the safety rules and reconciliation.", section: "core", order: 5 };
+
+All providers share one interface in `src/lib/payments/`. Pick one with `PAYMENT_PROVIDER`.
+
+| Provider | Good fit | In-app refund | Customer portal | Tested with |
+| --- | --- | --- | --- | --- |
+| Stripe | You have a business in a supported country | Automatic | Yes | Fake provider only |
+| Creem | Merchant of record, works for individuals | Manual in the Creem dashboard | No | Fake provider only |
+| Waffo | Merchant of record | Automatic through a refund ticket | Yes | Fake provider and a real sandbox |
+| Mock | Local development | Instant | No | Local only |
+
+Run a full purchase and refund in your provider's sandbox before taking real payments.
+
+## Stripe
+
+1. Create a price for each plan.
+2. Add a webhook endpoint at `https://example.com/api/webhooks/stripe`.
+3. Subscribe to these events:
+
+```text
+checkout.session.completed
+invoice.paid
+customer.subscription.updated
+customer.subscription.deleted
+charge.refunded
+charge.dispute.created
+charge.dispute.closed
+```
+
+4. Set the variables:
+
+```bash
+PAYMENT_PROVIDER=stripe
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRICE_STARTER=price_...
+STRIPE_PRICE_PRO=price_...
+STRIPE_PRICE_MAX=price_...
+```
+
+## Creem
+
+1. Create a product for each plan.
+2. Under **Developers**, then **Webhooks**, add `https://example.com/api/webhooks/creem`.
+3. Enable the events the handler uses:
+
+```text
+checkout.completed
+subscription.paid
+subscription.active
+subscription.trialing
+subscription.scheduled_cancel
+subscription.canceled
+subscription.expired
+subscription.past_due
+subscription.unpaid
+subscription.paused
+refund.created
+dispute.created
+```
+
+4. Set the variables:
+
+```bash
+PAYMENT_PROVIDER=creem
+CREEM_API_KEY=...
+CREEM_WEBHOOK_SECRET=...
+CREEM_TEST_MODE=true
+CREEM_PRODUCT_STARTER=prod_...
+CREEM_PRODUCT_PRO=prod_...
+CREEM_PRODUCT_MAX=prod_...
+```
+
+Set `CREEM_TEST_MODE=false` at launch. Creem has no refund API and no API to list payments by time, so refunds are made in its dashboard, and renewal and refund reconciliation depends on webhooks.
+
+## Waffo
+
+1. Create products in the console.
+2. Create an API key. Test and production each need their own.
+3. Under **Settings**, then **Webhooks**, add `https://example.com/api/webhooks/waffo`, once for test and once for production.
+4. Select these events:
+
+```text
+order.completed
+subscription.activated
+subscription.payment_succeeded
+subscription.renewed
+subscription.recovered
+subscription.canceling
+subscription.uncanceled
+subscription.canceled
+subscription.past_due
+refund.succeeded
+refund.failed
+```
+
+5. Set the variables:
+
+```bash
+PAYMENT_PROVIDER=waffo
+WAFFO_MERCHANT_ID=...
+WAFFO_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+WAFFO_STORE_ID=...
+WAFFO_TEST_MODE=true
+WAFFO_PRODUCT_STARTER=PROD_...
+WAFFO_PRODUCT_PRO=PROD_...
+WAFFO_PRODUCT_MAX=PROD_...
+```
+
+`WAFFO_PRIVATE_KEY_BASE64` is an alternative that holds the whole PEM in base64.
+
+`WAFFO_STORE_ID` is required. Waffo uses one signing key across its platform, so a valid signature alone doesn't prove an event belongs to your store.
+
+Before launch, publish the products to production, switch to the production key and set `WAFFO_TEST_MODE=false`.
+
+When testing through a tunnel, enter the full webhook path. If you enter only the domain, the event reaches the homepage and gets a 200, so Waffo won't retry and the order stays pending.
+
+## Safety rules
+
+Forged top-up webhooks are the most common attack on sites like this. Keep these rules when you change payment code:
+
+- Verify the signature against the **raw** request body first. Reject the event if verification fails or no secret is configured.
+- Decide how many credits to grant only from the plan on **your** order. Use webhook fields only to find the order.
+- An order must belong to the provider that sent the webhook.
+- Every grant has a unique `refId`, so a replayed webhook can't add credits twice.
+- The `?paid=` return parameter doesn't mean paid. It only triggers a lookup at the provider for the user's own pending order.
+- Subscription status follows the latest provider event time, so old or out-of-order events can't roll it back.
+- Each subscription grant maps to one payment (`stripe_` + invoice, `creem_tx_` + transaction, `waffo_` + payment ID). Refunds rely on this to find what to claw back.
+- Mock payments only work on a local address outside production.
+
+Requests that fail signature verification are logged but not stored, so nobody can flood your database through a public webhook URL.
+
+## Reconciliation
+
+Webhooks can get lost. Three recovery paths use the same idempotent entry point, so a late webhook still grants credits only once.
+
+| When | What happens |
+| --- | --- |
+| User returns to `/dashboard?paid=...` | If the order is still pending, query the provider, at most once per order every 10 seconds |
+| `payments.pending`, every 10 minutes | Check orders pending for over 10 minutes. Fulfill the paid ones, and mark expired or 24-hour-unpaid ones as failed |
+| `payments.reconcile`, daily | Pull the last 48 hours of payments and refunds, fill in anything missed, and check active and past-due subscriptions |
+
+Creem is limited here: it can recover checkouts and subscription status, but not renewals or refunds.
+
+Problems appear in **Issues & reconciliation** at `/admin/reconciliation`, and new ones alert admins by bell and email.
+
+## Promo codes
+
+Link to `/pricing?code=SPRING`. Create the code at your provider first. The template only checks the format (3 to 32 letters, digits or hyphens). The provider decides the discount, and if it rejects the code, checkout continues without it.
+
+A promo code changes the price, not the credits. Refunds are based on the amount actually paid.
+
+## Trials
+
+Enable trials on the provider's product. A trial period grants only the plan's `trialCredits` (default 0), and the full amount arrives with the first real charge. Otherwise someone could start a trial, spend everything and cancel.
+
+## Disputes
+
+| Provider | Handling |
+| --- | --- |
+| Stripe | Credits are clawed back when a dispute opens and returned if you win |
+| Creem | Credits are clawed back when a dispute opens |
+| Waffo | No dispute event is documented. Follow the console notification and adjust credits on the user's admin page |
+
+A manual admin deduction can't take a balance below zero, so it may not cover the full amount if the user has already spent the credits.

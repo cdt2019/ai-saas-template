@@ -1,0 +1,73 @@
+export const meta = { title: "Newsletter", description: "Double opt-in signup, one-click unsubscribe, campaigns and batched delivery.", section: "operate", order: 10 };
+
+The newsletter handles signup, confirmation, unsubscribe and plain-text campaigns. It requires Resend in production.
+
+```bash
+RESEND_API_KEY=...
+EMAIL_FROM="YourBrand <hello@example.com>"
+```
+
+## Signup
+
+Visitors subscribe from the site footer or the `/newsletter` page.
+
+1. The visitor enters their email.
+2. They receive a confirmation email.
+3. The link opens a page where they press a button to confirm.
+
+The button matters because mail scanners open links automatically. Requiring a press stops them from confirming an address on their own.
+
+Signups are limited per IP by `LIMIT_NEWSLETTER_PER_IP_HOUR` (default 5). The response is the same whether or not the address is already subscribed, so the form can't be used to check who's on your list.
+
+Unconfirmed signups are deleted after 30 days.
+
+## Unsubscribe
+
+Every campaign email supports two ways out:
+
+- One-click unsubscribe through RFC 8058 `List-Unsubscribe` headers, which mail apps show as a built-in button
+- An unsubscribe link in the email itself
+
+## Managing subscribers
+
+`/admin/newsletter` shows your subscribers. You can:
+
+- Filter the list
+- Export it as CSV
+- Remove a subscriber
+
+Treat the export as personal data, and store it accordingly.
+
+## Sending a campaign
+
+1. Open `/admin/newsletter` and write a plain-text campaign.
+2. Choose the audience: all, English or Chinese subscribers.
+3. Send a test to yourself and check it.
+4. Send.
+
+## Delivery
+
+Campaigns are delivered in batches by the scheduled job `newsletter.send`, which runs every 10 minutes.
+
+| Setting | Value |
+| --- | --- |
+| Batch size | `NEWSLETTER_BATCH_SIZE`, default 100 |
+| Delay between emails | About 600 ms with a real provider |
+
+If a send is interrupted, that email is marked failed and isn't retried. A failed email is better than the same person getting it twice.
+
+### Plan for your volume
+
+Your clock decides how fast a campaign goes out. At the default batch size:
+
+| Trigger | Approximate throughput |
+| --- | --- |
+| Every 10 minutes | 600 emails per hour |
+| Vercel Hobby (one tick a day) | 100 emails per day |
+
+Check two limits before sending to a large list:
+
+- **Function time.** 100 emails at 600 ms each take about 60 seconds, which is the Vercel Hobby limit. Lower the batch size on that plan.
+- **Resend quota.** The free plan allows 3,000 emails a month and 100 a day.
+
+See [Scheduled jobs](scheduled-jobs#triggers) to set up a more frequent trigger.

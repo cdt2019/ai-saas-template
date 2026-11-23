@@ -1,0 +1,98 @@
+export const meta = { title: "定时任务", description: "任务注册表、几种触发方式，以及怎么加自己的任务。", section: "operate", order: 9 };
+
+任务在 `src/lib/jobs/registry.ts` 里用代码登记。站点只暴露一个入口 `/api/cron/tick`，每次调用就执行所有到点的任务。需要有外部服务或进程内定时器来调用它。
+
+## 内置任务
+
+频率是 UTC 时间的 cron 表达式。
+
+| 任务 | 默认频率 | 做什么 |
+| --- | --- | --- |
+| `payments.pending` | 每 10 分钟 | 查找已付款但没收到回调的订单，再检查支付异常 |
+| `newsletter.send` | 每 10 分钟 | 发送邮件活动的下一批 |
+| `payments.reconcile` | 每天 03:17 | 和平台核对最近 48 小时的数据，补上遗漏 |
+| `ledger.check` | 每天 03:20 | 核对余额和流水，检查超额退款、卡住的退款和负余额 |
+| `ai.sweep` | 每 10 分钟 | 检查没人再查询的 AI 任务：已完成的视频结单，超时或中途退出的退积分 |
+| `cleanup` | 每天 03:25 | 清理过期的限流记录和验证码、180 天前的已读通知、90 天前的运行记录 |
+
+## 触发方式
+
+### Vercel Cron
+
+`vercel.json` 已配好每天 03:30 调用一次。设置 `CRON_SECRET` 后，Vercel 会自动带上。
+
+Hobby 套餐每天只能跑一次 cron，所有任务（包括 Newsletter）最多每天跑一次。Pro 套餐可以改成 `*/10 * * * *`。
+
+### GitHub Actions
+
+`.github/workflows/cron.yml` 每 10 分钟调用一次。在仓库设置里加变量 `SITE_URL` 和密钥 `CRON_SECRET` 就启用了。
+
+### 自己的服务器
+
+在服务器或 Docker 里常驻运行 `next start` 时：
+
+```bash
+CRON_MODE=internal
+```
+
+进程内定时器会每分钟检查一次到点的任务。Serverless 平台不要用这个模式，在 Vercel 上 `/admin/system` 会报错。
+
+### 其他定时服务
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://example.com/api/cron/tick
+```
+
+没带密钥、也不是已登录的管理员时，接口返回 401。
+
+### 调度器健康
+
+`/admin/jobs` 显示最近一次触发的时间。超过预期间隔的两倍再加 10 分钟还没触发，后台就会告警。
+
+`CRON_TICK_MINUTES` 要和实际频率一致：`CRON_MODE=internal` 时默认 1，否则默认 1440。如果每 10 分钟调用一次，就设成 10，时钟停了才能尽早发现。
+
+## 一次运行的过程
+
+1. 用数据库锁保证同一个任务只跑一份，多台服务器也一样。
+2. 写一条 `job_run`，记录触发方式、状态、耗时、摘要和日志。
+3. 带超时执行任务。
+4. 失败时通知管理员；配了 Sentry 也会上报。
+
+同一次触发里，到点的任务依次执行。错过多次的任务只补跑一次。
+
+## 添加任务
+
+在 `src/lib/jobs/registry.ts` 的 `JOBS` 里加一项：
+
+```ts
+{
+  name: "reports.weekly",
+  schedule: "0 6 * * 1", // 每周一 06:00 UTC
+  timeoutMs: 5 * 60_000,
+  run: async (ctx) => {
+    const sent = await sendWeeklyReport();
+    ctx.log(`sent ${sent} reports`);
+    return { sent };
+  },
+},
+```
+
+加好后它就会出现在 `/admin/jobs`，可以手动运行和修改频率。
+
+| 上下文字段 | 作用 |
+| --- | --- |
+| `ctx.log(line)` | 写运行日志（最多 200 行） |
+| `ctx.params` | 手动运行时传入的参数 |
+| `ctx.trigger` | `tick`、`internal` 或 `manual` |
+
+写任务时注意：
+
+- **要能安全地重复执行。** 进程崩溃或平台超时都可能把运行中途切断。
+- **超时不会停掉你的代码。** 这次运行会被标记为失败并释放锁，但函数本身还在继续执行。工作要拆成小批，有副作用的操作先确认这条数据没被别的运行领走。
+- **注意平台限制。** `/api/cron/tick` 最长 300 秒，但 Vercel Hobby 的函数上限是 60 秒，同一次触发里的任务共用这段时间。
+
+## 修改频率
+
+在 `/admin/jobs` 输入 5 段 cron 表达式，保存在数据库里并覆盖代码默认值。清空后恢复默认。
+
+关闭的任务不会按时运行，但仍然可以手动运行。

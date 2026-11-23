@@ -1,0 +1,71 @@
+export const meta = { title: "快速开始", description: "安装模板、本地运行、成为管理员，并完成第一批改动。", section: "start", order: 2 };
+
+## 安装运行
+
+需要 Node.js 22。
+
+```bash
+git clone https://github.com/cdt2019/ai-saas-template.git
+cd ai-saas-template
+npm install
+npm run dev
+```
+
+打开 `http://localhost:3000`。不用配任何 key，数据库、支付、AI、邮件和上传都走[本地兜底](introduction#本地兜底)。
+
+## 注册账号
+
+1. 打开 `/signup`，随便用一个邮箱注册，比如 `you@example.com`。
+2. 从终端复制 6 位验证码，`.data/dev-mail/` 里也有一份。
+3. 输入验证码后自动登录，账号里有 10 个赠送积分。
+
+## 成为管理员
+
+在项目根目录新建 `.env.local`：
+
+```bash
+ADMIN_EMAILS=you@example.com
+```
+
+重启 `npm run dev`，用这个邮箱登录，再打开 `/admin`。
+
+`ADMIN_EMAILS` 里的邮箱必须已验证才算管理员，这样别人抢先用你的邮箱注册也拿不到后台。如果你是先注册、后加的变量，重启后已验证的账号会直接变成管理员。
+
+## 走一遍主要流程
+
+| 想试什么 | 去哪里 |
+| --- | --- |
+| 生成文本、图片、视频 | `/studio` |
+| 模拟生成失败并退积分 | 提示词里带 `__fail__` |
+| 用模拟收银台买积分 | `/pricing` |
+| 申请退款 | `/settings?tab=billing` |
+| 审核退款 | `/admin/refunds` |
+| 看上线前还缺什么 | `/admin/system` |
+
+## 先改这些
+
+| 要改的 | 文件 |
+| --- | --- |
+| 品牌名、网址、联系邮箱、语言、默认主题 | `src/config/site.ts` |
+| 品牌色 | `src/app/globals.css` 顶部 |
+| Logo | `src/components/Logo.tsx` |
+| 站点文案 | `src/i18n/dictionaries/en.ts` 和 `zh.ts` |
+| 套餐和价格 | `src/config/pricing.ts` |
+| AI 功能、模型、积分价格 | `src/config/ai.ts` |
+| 退款规则 | `src/config/refunds.ts` |
+| 你的产品 | `src/tool/Tool.tsx` 和 `src/app/[lang]/(app)/studio` |
+
+「Acme」是占位品牌名。隐私政策和服务条款上线前要按你的业务重新审一遍。
+
+## 常用命令
+
+```bash
+npm run dev          # 开发服务器
+npm run build        # 生产构建
+npm run lint         # ESLint
+npm run typecheck    # 生成路由类型并运行 tsc
+npm test             # 单元测试
+npm run db:generate  # 改表结构后生成迁移
+npm run db:migrate   # 把迁移应用到 DATABASE_URL
+npm run db:studio    # 浏览数据库
+```

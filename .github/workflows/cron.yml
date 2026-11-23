@@ -1,0 +1,20 @@
+# 定时任务的「时钟」：每 10 分钟调用一次 /api/cron/tick，到点的任务由站点自己执行（任务和频率见 src/lib/jobs/registry.ts）。
+# 部署在哪都能用（Vercel 免费版的 Cron 一天只能一次，用这个可以更及时）。
+# 启用：仓库 Settings → Secrets and variables → Actions：
+#   Variables 里加 SITE_URL（如 https://www.example.com），Secrets 里加 CRON_SECRET（和站点环境变量里的一样）
+# 没配 SITE_URL 时这个工作流什么都不做
+name: cron tick
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  tick:
+    if: ${{ vars.SITE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run due jobs
+        run: curl -fsS --max-time 300 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ vars.SITE_URL }}/api/cron/tick"

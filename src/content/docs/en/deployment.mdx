@@ -1,0 +1,98 @@
+export const meta = { title: "Deployment", description: "The go-live checklist, the system check page and database migrations.", section: "operate", order: 12 };
+
+The template runs on Vercel or any Node.js host. It hasn't been deployed to a live production site yet, and only Waffo has run against a real sandbox. Test every external service with your own accounts first.
+
+## Go-live checklist
+
+### 1. Database
+
+Create a Postgres database, for example on Neon or Supabase.
+
+```bash
+DATABASE_URL=postgres://...      # pooled address
+DATABASE_URL_UNPOOLED=postgres://...  # direct address
+```
+
+Use the pooled address at runtime: on Neon the host contains `-pooler`, and on Supabase it's `pooler.supabase.com` on port 6543. A direct address logs a warning in production. Then [run the migrations](#migrations).
+
+### 2. Site and auth
+
+```bash
+NEXT_PUBLIC_SITE_URL=https://example.com
+BETTER_AUTH_URL=https://example.com
+BETTER_AUTH_SECRET=   # openssl rand -base64 32
+```
+
+Also replace the brand and contact details in `src/config/site.ts`.
+
+### 3. Email
+
+Verify your domain in Resend and set `RESEND_API_KEY` and `EMAIL_FROM`. Without email, users can't complete sign-up.
+
+### 4. Payments
+
+Set `PAYMENT_PROVIDER` and follow the steps in [Payments](payments). Turn off test mode when you're ready for real charges.
+
+### 5. AI and storage
+
+Set `AI_API_KEY`, `FAL_KEY` and the five `R2_*` variables, and configure CORS on the bucket. Run one real generation and check that your credit price covers its cost.
+
+### 6. Abuse protection
+
+Set both Turnstile keys before opening sign-ups. Consider `SIGNUP_BONUS_CREDITS=0` if your visitors mostly come once.
+
+### 7. Admin
+
+Put your email in `ADMIN_EMAILS`, then sign in and verify it. Afterwards, check the user list for admins you don't recognize.
+
+### 8. Scheduled jobs
+
+Set `CRON_SECRET`, choose a [trigger](scheduled-jobs#triggers), and confirm that `/admin/jobs` shows the scheduler running.
+
+### 9. Optional services
+
+- [Google and GitHub sign-in](authentication#google-and-github)
+- [Sentry](monitoring)
+- [Newsletter](newsletter)
+
+### 10. Final test
+
+1. Open `/admin/system` and clear every error.
+2. Sign up with a new email.
+3. Buy a credit pack and a subscription in your provider's test mode.
+4. Confirm credits arrive through the webhook.
+5. Request a refund, approve it, and confirm the credits and payment status update.
+6. Run a real AI generation of each kind you offer.
+7. Switch to live keys and repeat one small purchase.
+
+## System check
+
+`/admin/system` reads your environment and database, then reports what's missing or unsafe.
+
+| Group | Checks |
+| --- | --- |
+| Site | Public URL, auth secret, auth URL, admin addresses |
+| Database | Connection and applied migrations |
+| Email | Resend, sender address, verification setting |
+| Payments | Provider, keys, products, test or live mode, exact webhook URL |
+| Jobs | Trigger and scheduler health |
+| AI | Text, image and video keys, and R2 storage |
+| Protection | Turnstile, Google, GitHub |
+
+It shows variable names only, never values. It doesn't call any provider, so a green check means a value is **present**, not that the key works. You still need a real end-to-end run.
+
+Production configuration errors also appear in **Needs attention** on the overview.
+
+## Migrations
+
+```bash
+npm run db:generate   # after changing src/db/schema.ts
+npm run db:migrate    # apply to the database
+```
+
+- `db:generate` writes SQL to `drizzle/`. Commit those files.
+- `db:migrate` uses `DATABASE_URL_UNPOOLED` if set, otherwise `DATABASE_URL`. Make sure the variable is available to the command.
+- Run it before the new code starts handling traffic.
+- Local PGlite applies migrations automatically on startup. A real Postgres database doesn't.
+
+`/admin/system` compares applied migrations with those in the repository and flags any that are pending.

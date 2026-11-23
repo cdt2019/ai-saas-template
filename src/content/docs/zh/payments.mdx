@@ -1,0 +1,165 @@
+export const meta = { title: "支付", description: "配置 Stripe、Creem 或 Waffo，设置 webhook，了解支付安全规则和对账机制。", section: "core", order: 5 };
+
+所有支付平台共用 `src/lib/payments/` 里的一套接口，用 `PAYMENT_PROVIDER` 选择其中一个。
+
+| 平台 | 适合 | 站内退款 | 客户门户 | 验证情况 |
+| --- | --- | --- | --- | --- |
+| Stripe | 有受支持国家的公司主体 | 自动 | 有 | 只跑过假平台 |
+| Creem | MoR，个人也能开通 | 到 Creem 后台手动退 | 无 | 只跑过假平台 |
+| Waffo | MoR | 通过退款工单自动退 | 有 | 假平台 + 真实沙盒 |
+| Mock | 本地开发 | 立即完成 | 无 | 仅本地 |
+
+收真钱之前，先在支付平台的沙盒里完整走一遍购买和退款。
+
+## Stripe
+
+1. 给每个方案创建价格。
+2. 添加 webhook：`https://example.com/api/webhooks/stripe`。
+3. 订阅这些事件：
+
+```text
+checkout.session.completed
+invoice.paid
+customer.subscription.updated
+customer.subscription.deleted
+charge.refunded
+charge.dispute.created
+charge.dispute.closed
+```
+
+4. 配置变量：
+
+```bash
+PAYMENT_PROVIDER=stripe
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRICE_STARTER=price_...
+STRIPE_PRICE_PRO=price_...
+STRIPE_PRICE_MAX=price_...
+```
+
+## Creem
+
+1. 给每个方案创建产品。
+2. 在 **Developers** → **Webhooks** 添加 `https://example.com/api/webhooks/creem`。
+3. 开启代码用到的事件：
+
+```text
+checkout.completed
+subscription.paid
+subscription.active
+subscription.trialing
+subscription.scheduled_cancel
+subscription.canceled
+subscription.expired
+subscription.past_due
+subscription.unpaid
+subscription.paused
+refund.created
+dispute.created
+```
+
+4. 配置变量：
+
+```bash
+PAYMENT_PROVIDER=creem
+CREEM_API_KEY=...
+CREEM_WEBHOOK_SECRET=...
+CREEM_TEST_MODE=true
+CREEM_PRODUCT_STARTER=prod_...
+CREEM_PRODUCT_PRO=prod_...
+CREEM_PRODUCT_MAX=prod_...
+```
+
+上线时改成 `CREEM_TEST_MODE=false`。Creem 没有退款接口，也没有按时间拉付款的接口，所以退款要到它的后台操作，续费和退款的对账只能靠 webhook。
+
+## Waffo
+
+1. 在控制台创建产品。
+2. 创建 API Key，测试和生产各一把。
+3. 在 **设置** → **Webhooks** 添加 `https://example.com/api/webhooks/waffo`，测试和生产各一条。
+4. 勾选这些事件：
+
+```text
+order.completed
+subscription.activated
+subscription.payment_succeeded
+subscription.renewed
+subscription.recovered
+subscription.canceling
+subscription.uncanceled
+subscription.canceled
+subscription.past_due
+refund.succeeded
+refund.failed
+```
+
+5. 配置变量：
+
+```bash
+PAYMENT_PROVIDER=waffo
+WAFFO_MERCHANT_ID=...
+WAFFO_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+WAFFO_STORE_ID=...
+WAFFO_TEST_MODE=true
+WAFFO_PRODUCT_STARTER=PROD_...
+WAFFO_PRODUCT_PRO=PROD_...
+WAFFO_PRODUCT_MAX=PROD_...
+```
+
+也可以用 `WAFFO_PRIVATE_KEY_BASE64`，填整段 PEM 的 base64。
+
+`WAFFO_STORE_ID` 必填。Waffo 全平台共用一套签名密钥，签名正确只能说明事件来自 Waffo，不能说明是你店铺的订单。
+
+上线前把产品发布到生产，换成生产 key，并设置 `WAFFO_TEST_MODE=false`。
+
+用隧道联调时要填完整的 webhook 路径。只填域名的话，事件打到首页也会返回 200，Waffo 当作成功不再重试，订单就一直停在 pending。
+
+## 支付安全规则
+
+伪造充值回调是这类站最常见的攻击方式。改支付代码时不要破坏这些规则：
+
+- 先用**原始请求体**验签。验签失败或没配密钥，一律拒绝。
+- 发多少积分只看**我们自己订单**上的方案，回调里的字段只用来找订单。
+- 订单必须属于发来回调的那个平台。
+- 每次发放都有唯一的 `refId`，回调重放不会重复加积分。
+- 跳转回来的 `?paid=` 不代表已付款，只会触发一次查询：查用户自己还在 pending 的订单。
+- 订阅状态按平台事件时间取最新，旧事件或乱序事件改不了状态。
+- 订阅的每次发放都对应一笔付款（`stripe_` + 账单号、`creem_tx_` + 交易号、`waffo_` + 支付号），退款时靠它找到要扣回的积分。
+- 模拟支付只在非生产环境的本机地址可用。
+
+验签失败的请求只打日志、不入库，免得有人通过公开的回调地址把数据库刷爆。
+
+## 对账
+
+Webhook 可能会丢。下面三条补救路径走同一个幂等入口，回调晚到也只发一次积分。
+
+| 时机 | 做什么 |
+| --- | --- |
+| 用户跳回 `/dashboard?paid=...` | 订单还在 pending 就去平台查一次，同一订单 10 秒内最多查一次 |
+| `payments.pending`，每 10 分钟 | 检查 pending 超过 10 分钟的订单：已付的补单，过期或 24 小时未付的标记失败 |
+| `payments.reconcile`，每天 | 拉最近 48 小时的付款和退款，补上遗漏，并核对有效和欠费的订阅 |
+
+Creem 的能力有限：可以补收银台和订阅状态，补不了续费和退款。
+
+发现的问题会进入 `/admin/reconciliation`（异常与对账），新问题通过铃铛和邮件提醒管理员。
+
+## 优惠码
+
+推广链接用 `/pricing?code=SPRING`。码要先在支付平台建好。模板只校验格式（3 到 32 位字母、数字或连字符），折扣多少由平台决定，平台不接受时就去掉码继续结账。
+
+优惠码只影响价格，不影响积分数量。退款按实付金额计算。
+
+## 试用
+
+试用在支付平台的产品上开启。试用期只发方案里的 `trialCredits`（默认 0），第一次正式扣款才发整期积分，否则开个试用、用光积分再取消就能白拿。
+
+## 拒付
+
+| 平台 | 处理方式 |
+| --- | --- |
+| Stripe | 拒付发生时扣回积分，赢了再还 |
+| Creem | 拒付发生时扣回积分 |
+| Waffo | 文档里没有拒付事件，按控制台通知到后台用户详情页手动调整 |
+
+后台手动扣减不能把余额扣成负数，如果用户已经把积分用掉了，可能扣不满。

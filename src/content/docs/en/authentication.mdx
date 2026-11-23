@@ -1,0 +1,114 @@
+export const meta = { title: "Authentication", description: "Email codes, password reset, Google and GitHub sign-in, and abuse protection.", section: "core", order: 4 };
+
+Sign-in is built on Better Auth and configured in `src/lib/auth.ts`.
+
+## Email sign-up
+
+1. The user registers with an email and password. Passwords need at least 8 characters, with letters and numbers. The server enforces this too.
+2. A 6-digit code is emailed. It expires in 10 minutes and stops working after 5 wrong attempts. Codes are stored hashed.
+3. Entering the code verifies the email, signs the user in and grants the sign-up bonus.
+
+An unverified user who tries to sign in gets a new code automatically.
+
+If someone registers with an address that already has an account, the response looks the same as a normal sign-up. No account or code is created, and the owner gets an email saying someone tried. This keeps the form from revealing which addresses are registered.
+
+To turn verification off:
+
+```bash
+AUTH_REQUIRE_EMAIL_VERIFICATION=false
+```
+
+Keep it on in production. The bonus credits are granted after verification, which makes bulk sign-ups less useful. With verification on, you must configure Resend or nobody can finish signing up.
+
+## Password reset
+
+Reset also uses a 6-digit code, through `/email-otp/request-password-reset` and `/email-otp/reset-password`. The template doesn't send reset links, and the link-based endpoints return 404.
+
+These endpoints are also disabled:
+
+- Sign-in with an email code, because it would skip the sign-up checks
+- Changing the account email
+
+## Google and GitHub
+
+A button appears only when both variables for that provider are set.
+
+### Google
+
+1. In Google Cloud Console, open **APIs & Services**, then **Credentials**, and create an OAuth client ID of type **Web application**.
+2. Add the authorized redirect URIs:
+
+```text
+http://localhost:3000/api/auth/callback/google
+https://example.com/api/auth/callback/google
+```
+
+3. Set the variables and restart:
+
+```bash
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+BETTER_AUTH_URL=https://example.com
+```
+
+While the OAuth consent screen is in **Testing**, only test users can sign in. Publish it before launch.
+
+### GitHub
+
+Create an OAuth app at `github.com/settings/developers` with this callback:
+
+```text
+https://example.com/api/auth/callback/github
+```
+
+Then set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`.
+
+## Route protection
+
+`src/proxy.ts` redirects signed-out visitors from `/dashboard`, `/settings` and `/admin` to the login page. It only checks that a session cookie exists. Each page verifies the session again on the server.
+
+Signed-in users who aren't admins get a 404 from `/admin`, so the admin doesn't reveal that it exists.
+
+## Admins
+
+A user is an admin when either is true:
+
+- Their `role` in the database is `admin`
+- Their email is in `ADMIN_EMAILS` **and** verified
+
+Users can't change `credits` or `role` through profile updates.
+
+## Abuse protection
+
+### Turnstile
+
+Set both keys to require a Cloudflare Turnstile check on sign-up, sign-in, sending a verification code and requesting a password reset.
+
+```bash
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=...
+TURNSTILE_SECRET_KEY=...
+```
+
+Don't set only the secret: the server would require a token that the page can't produce. Cloudflare's test keys for local work are listed in `.env.example`.
+
+### Rate limits
+
+Counts are stored in Postgres, so they work across instances without Redis. Defaults are in `src/lib/abuse.ts`.
+
+| Action | Default limit |
+| --- | --- |
+| Sign-up | 20 per IP per hour |
+| Sign-in | 20 per IP per 10 minutes |
+| Send or enter a code, reset password | 30 per IP per 10 minutes |
+| AI calls | 10 per user and 30 per IP per minute |
+| Uploads | 30 per user per hour |
+
+The sign-up limit is fairly loose because many mobile users can share one carrier IP. Turnstile and email checks do most of the work there.
+
+### Disposable email
+
+Sign-ups from known throwaway domains, including their subdomains, are rejected. Add domains to `DISPOSABLE_DOMAINS` in `src/lib/abuse.ts`.
+
+### Banned users
+
+A banned user can't create a new session by any sign-in method. Banning from the admin also removes their existing sessions.

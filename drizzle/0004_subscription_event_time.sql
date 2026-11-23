@@ -1,0 +1,1 @@
+ALTER TABLE "subscription" ADD COLUMN "status_event_at" timestamp with time zone;

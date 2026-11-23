@@ -1,0 +1,86 @@
+export const meta = { title: "Monitoring", description: "Optional Sentry error reporting, what it sends, and what it removes.", section: "operate", order: 11 };
+
+Error monitoring is optional and uses Sentry. Without a DSN, the SDK isn't loaded at runtime and nothing is sent.
+
+## Setup
+
+```bash
+# Server errors
+SENTRY_DSN=https://key@example.ingest.sentry.io/1
+
+# Browser errors
+NEXT_PUBLIC_SENTRY_DSN=https://key@example.ingest.sentry.io/1
+
+# Optional
+SENTRY_ENVIRONMENT=production
+SENTRY_TRACES_SAMPLE_RATE=0
+```
+
+You can set either DSN alone to monitor only that side. `NEXT_PUBLIC_SENTRY_DSN` is built into the browser bundle, so rebuild after changing it.
+
+| Variable | Applies to | Default |
+| --- | --- | --- |
+| `SENTRY_DSN` | Server | Off |
+| `NEXT_PUBLIC_SENTRY_DSN` | Browser | Off |
+| `SENTRY_ENVIRONMENT` | Server only | `NODE_ENV` |
+| `SENTRY_TRACES_SAMPLE_RATE` | Server only | 0 |
+
+Browser events always use `NODE_ENV` as their environment and never send traces.
+
+## Source maps
+
+To see original code in stack traces, set these at build time:
+
+```bash
+SENTRY_AUTH_TOKEN=...
+SENTRY_ORG=your-org
+SENTRY_PROJECT=your-project
+```
+
+Source maps are uploaded during `next build` and then deleted from the build output. Without the token, the build doesn't use the Sentry plugin.
+
+## What's reported
+
+| Event | Level |
+| --- | --- |
+| Uncaught server and page errors | Error |
+| Browser errors | Error |
+| Failed scheduled jobs | Error |
+| Webhook processing errors | Error |
+| AI call failures | Warning |
+
+To report your own handled error on the server:
+
+```ts
+import { captureError } from "@/lib/monitoring";
+
+await captureError(error, { level: "warning", tags: { area: "my-feature" } });
+```
+
+It does nothing without `SENTRY_DSN`, and a monitoring failure never breaks the calling code.
+
+## Privacy
+
+`src/lib/monitoring-scrub.ts` runs on every error event before it leaves your app, on both server and browser.
+
+**Removed:**
+
+- User data
+- Cookies
+- Request bodies
+- Query strings, from both the query field and the URL
+- All request headers except `User-Agent`, `Content-Type` and `Accept-Language`, so cookies, signatures and `Referer` are never sent
+- Breadcrumb data
+
+**Replaced in messages:**
+
+- Email addresses become `[email]`
+- Stripe, Resend and similar keys, bearer tokens and private keys become `[secret]`
+
+**Still sent:** the stack trace, the URL path and those three headers. Avoid putting personal data or tokens in URL paths.
+
+Scrubbing is pattern-based, so it can't recognize every secret. Avoid including sensitive values in error messages in the first place.
+
+## Performance tracing
+
+Tracing is off by default. When you set `SENTRY_TRACES_SAMPLE_RATE` above 0, transactions go through the same request scrubbing, but span names and attributes are not rewritten. Review what they contain before turning it on.

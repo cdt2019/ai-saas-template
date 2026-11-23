@@ -1,0 +1,111 @@
+export const meta = { title: "AI features", description: "Add a paid AI feature, charge for it, handle failures and run async video jobs.", section: "core", order: 7 };
+
+Text goes through any OpenAI-compatible API, with OpenRouter as the default. Images and video go through fal.ai. Without keys in development, all three return mock results.
+
+The real providers haven't been run with live keys yet. Test each one yourself before launch.
+
+## Add a feature
+
+Add an entry to `aiFeatures` in `src/config/ai.ts`:
+
+```ts
+{
+  id: "summarize",
+  kind: "text",
+  cost: 2,
+  model: process.env.AI_TEXT_MODEL ?? "anthropic/claude-haiku-4.5",
+  maxInput: 8000,
+  maxTokens: 800,
+  system: "Summarize the user's text in three short bullet points.",
+},
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Name used in API requests |
+| `kind` | `text`, `image` or `video` |
+| `cost` | Credits per call |
+| `model` | OpenRouter or fal.ai model ID |
+| `maxInput` | Maximum input characters |
+| `maxTokens` | Text only: output limit |
+| `system` | Text only: system prompt |
+| `extraInput` | Extra model parameters, such as video duration and resolution |
+
+Then call the route for that kind:
+
+```ts
+const res = await fetch("/api/ai/text", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ feature: "summarize", input }),
+});
+```
+
+The demo UI lives in `src/components/studio/Studio.tsx`. A new feature doesn't appear there until you add it. On `/admin/ai`, it shows under its raw `id` unless you add a label.
+
+## Routes
+
+| Route | Result |
+| --- | --- |
+| `POST /api/ai/text` | Streamed plain text, with the balance in `X-Credits-Balance` |
+| `POST /api/ai/image` | `url`, `balance` and `id` |
+| `POST /api/ai/video` | `id` and `balance`. The job continues in the background |
+| `GET /api/ai/generations/[id]` | Status of a generation |
+
+Every route uses `guardAiRequest` in `src/lib/ai/guard.ts`. It checks the session, feature, input length, and rate limits per user and IP.
+
+## Charging
+
+The flow in `src/lib/ai/billing.ts`:
+
+1. `beginGeneration` deducts credits and creates a `pending` row. With too few credits, the API returns 402 and the model isn't called.
+2. The model runs.
+3. `succeedGeneration` saves the result, or `failGeneration` records the error and refunds.
+
+Charging first means concurrent requests can't spend more than the balance.
+
+Set the cost from real usage. Run one generation, check what the provider charged, and price credits at 3x that cost or more to cover payment fees, retries and free credits.
+
+## Failures
+
+| What happens | Credits |
+| --- | --- |
+| Not enough credits | Nothing charged |
+| Model fails before any output | Refunded |
+| Model fails midway through a text stream | Refunded, with an error marker at the end of the stream |
+| User disconnects before any output | Refunded |
+| User disconnects after some output | Charged |
+| Image generation fails | Refunded, API returns 502 |
+| Video submission fails | Refunded, API returns 502 |
+| Video fails or times out | Refunded |
+
+Failed calls appear on `/admin/ai` and in the **Needs attention** count for today. With Sentry configured, they're also reported as warnings.
+
+To test this locally, put `__fail__` in a prompt.
+
+## Video
+
+Image-to-video runs as an async job because it usually takes a few minutes.
+
+1. The browser uploads an image through `/api/upload`.
+2. `POST /api/ai/video` charges credits and submits the job to fal's queue.
+3. Status updates come from browser polling and, in production, a fal webhook.
+4. On success, the user gets an email and a notification. On failure or after 20 minutes, the credits are refunded.
+
+Input images must be the user's own uploads in PNG, JPEG or WebP. The upload route also accepts GIF, but the video route rejects it.
+
+The fal webhook is only sent when `NEXT_PUBLIC_SITE_URL` is a public `https` address. Its URL is signed, and the template treats it only as a signal to check the job with your own key.
+
+If nobody is polling and the webhook never arrives, the `ai.sweep` job (every 10 minutes) checks the provider, finishes videos that are ready and refunds jobs past the 20-minute timeout. It also refunds text or image calls left `pending` by a crashed process.
+
+### Changing the model
+
+Input fields differ between models. Check the model's API page on fal, then update `extraInput`:
+
+```ts
+extraInput: { duration: "5", resolution: "720p" },
+```
+
+Duration and resolution directly affect your cost, so review `cost` whenever you change them.
+
+Video URLs returned by fal live on fal's storage. Copy them to R2 if you need to keep them.

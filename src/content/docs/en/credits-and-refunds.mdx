@@ -1,0 +1,132 @@
+export const meta = { title: "Credits and refunds", description: "The credit ledger, idempotency, the refund formula, holds and clawbacks.", section: "core", order: 6 };
+
+## The ledger
+
+Every balance change is one row in `credit_transaction`, and `user.credits` holds the current total. Always change credits through `src/lib/credits.ts`, because a direct update makes the two disagree. The daily `ledger.check` job reports any mismatch.
+
+| Function | Use | When the balance is too low |
+| --- | --- | --- |
+| `grantCredits` | Add credits | Not applicable |
+| `spendCredits` | Spend credits | Returns `ok: false` and changes nothing |
+| `deductCredits` | Refund and dispute clawbacks | Deducts anyway, so the balance can go negative |
+
+```ts
+const result = await spendCredits({ userId, amount: 5, note: "my-feature" });
+if (!result.ok) return Response.json({ error: "insufficient_credits" }, { status: 402 });
+```
+
+Each row has a `reason`:
+
+| Reason | Meaning |
+| --- | --- |
+| `signup_bonus` | Sign-up bonus |
+| `purchase` | One-time credit pack |
+| `subscription` | Subscription period |
+| `trial` | Trial period |
+| `spend` | Used on a paid feature |
+| `refund` | Returned after a failed AI call |
+| `clawback` | Removed after a refund or dispute, or held for a refund request |
+| `restore` | Returned after a released hold or a won dispute |
+| `admin` | Manual adjustment |
+
+## Idempotency
+
+`refId` is unique across the ledger. If a row with the same `refId` already exists, `grantCredits` and `deductCredits` do nothing and return `false`.
+
+```ts
+await grantCredits({ userId, amount: 100, reason: "purchase", refId: `order_${orderId}` });
+```
+
+Webhooks, reconciliation and retries all use the same `refId` for the same payment, so they can run in any order and credits are only granted once.
+
+`spendCredits` is safe under concurrency because it updates with a condition: the row changes only if the balance covers the amount.
+
+## Refund rules
+
+The policy is in `src/config/refunds.ts`:
+
+```ts
+export const refundRules = {
+  packDays: 14,       // credit packs: days after payment
+  maxUsedRatio: 0.5,  // no self-service above this share used
+  perAccount: 1,      // self-service refunds per account
+  minAmount: 50,      // minimum refund, in cents
+};
+```
+
+- Subscriptions can only be refunded for the current period, while the subscription is active.
+- `perAccount` counts pending, processing and completed requests. Rejected, failed and canceled ones don't count.
+- A payment with a rejected or failed request can't be requested again by the user. A canceled one can.
+
+Users who don't qualify see no request button. They contact support, you refund in the provider's dashboard, and the webhook claws back the credits.
+
+## Refund formula
+
+Refunds are based on unused credits, not time. Otherwise someone could use most of their credits on day one and get most of their money back. The calculation is in `computeRefund` in `src/lib/credit-math.ts`:
+
+```text
+remaining = granted + linked clawbacks and restores
+unused    = min(balance, remaining - spent since this grant)
+amount    = floor(paid × unused / granted)
+credits   = ceil(granted × amount / paid)
+```
+
+Money rounds down and credits round up, so rounding never favors a refund beyond what was paid for. Credits spent after the grant are assumed to come from this payment.
+
+For example, a $5.00 pack of 100 credits with 20 used:
+
+```text
+unused  = 80
+amount  = floor(500 × 80 / 100) = 400 cents
+credits = ceil(100 × 400 / 500) = 80
+```
+
+## Request lifecycle
+
+| Status | Meaning | Credits |
+| --- | --- | --- |
+| `pending` | Submitted, waiting for review | Held |
+| `processing` | Approved, waiting for the provider | Held |
+| `refunded` | Provider confirmed the refund | Clawed back |
+| `rejected` | Declined by an admin | Returned |
+| `canceled` | Canceled by the user | Returned |
+| `failed` | Provider call failed or the refund was refused | Returned |
+
+### Holds
+
+When the user **submits**, the refundable credits leave their balance and the amount is fixed. They can't spend those credits during review.
+
+- Approval uses the fixed amount and doesn't recalculate.
+- Users can cancel a pending request and get the credits back immediately.
+- A full refund request on the current subscription period pauses Pro right away. Canceling or rejecting the request restores it.
+
+### Approval by provider
+
+| Provider | What approval does |
+| --- | --- |
+| Stripe | Refunds the PaymentIntent and turns off renewal for subscriptions |
+| Waffo | Creates a merchant refund ticket, which is approved automatically, and cancels renewal for subscriptions |
+| Creem | Nothing automatic. The admin refunds in the Creem dashboard, and the webhook closes the request |
+| Mock | Completes immediately |
+
+If the provider call fails, the hold is released and the request becomes `failed`. After fixing the problem, an admin can click **Retry**.
+
+Retry recalculates from the credits still unused, so the amount can only go down and the balance can't go negative. If the released credits were all spent, the retry stops with `nothing_left`.
+
+If a refund doesn't go through later, such as a rejected Waffo ticket, click **Release** to return the credits. A Waffo `refund.failed` event does this automatically.
+
+## Clawbacks
+
+When a refund or dispute arrives from a provider, `clawbackGrant` removes credits from the original grant:
+
+- Partial refunds claw back proportionally, rounded up.
+- The total never exceeds what the payment granted.
+- Credits already held for a request count toward the clawback. If the provider refunded more or less than requested, the difference is deducted or returned.
+- The clawback applies even if the balance is too low. A negative balance blocks paid features until the user tops up.
+- If no matching grant is found, the server logs a `[clawback]` warning.
+
+If you refund directly in the provider's dashboard, the webhook also closes any open request on that payment, so it can't be approved and refunded a second time.
+
+### Subscriptions
+
+When the current period's payment is fully returned, Pro ends immediately with status `refunded`, because none of the three providers ends the subscription on refund. Partial refunds and refunds of earlier months keep Pro. Only a new successful payment or a won dispute restores it.

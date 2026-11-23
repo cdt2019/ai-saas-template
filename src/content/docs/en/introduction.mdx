@@ -1,0 +1,53 @@
+export const meta = { title: "Introduction", description: "What the template is, what it includes, and what runs locally without any accounts.", section: "start", order: 1 };
+
+AI SaaS Template is an open-source Next.js 16 starter for paid AI tools. It covers the parts around your product: accounts, credits, payments, refunds, AI calls, email, scheduled jobs and an admin console.
+
+You clone it, run it without any keys, then replace the demo tool with your own.
+
+## What's included
+
+| Area | What you get |
+| --- | --- |
+| Accounts | Email and password with 6-digit codes, code-based password reset, optional Google and GitHub sign-in |
+| Abuse protection | Cloudflare Turnstile, per-IP and per-user rate limits stored in the database, disposable email blocking |
+| Payments | Stripe, Creem and Waffo behind one interface, plus a local mock provider. One-time packs, subscriptions, promo codes and trials |
+| Credits | An append-only ledger with idempotent grants, concurrency-safe spending and proportional clawbacks |
+| Refunds | Self-service requests, credits held on submit, admin review, refund through the original provider |
+| AI | Streaming text through any OpenAI-compatible API, images and image-to-video through fal.ai |
+| Admin | Overview, users, payments, subscriptions, refunds, issues, credit ledger, AI calls, jobs, payment log, newsletter, system check |
+| Scheduled jobs | Jobs registered in code, with locks, timeouts, run history and failure alerts |
+| Newsletter | Double opt-in, one-click unsubscribe, plain-text campaigns sent in batches |
+| Monitoring | Optional Sentry error reporting with sensitive data removed |
+| Site | Landing page, pricing, blog, docs, English and Chinese routes, SEO metadata, dark and light themes |
+
+## Local fallbacks
+
+With no `.env.local`, every external service has a local replacement:
+
+| Service | Without configuration |
+| --- | --- |
+| Database | PGlite (embedded Postgres) in `.data/pglite`, migrated on startup |
+| Payments | Mock checkout that grants credits |
+| AI | Mock results. Put `__fail__` in a prompt to test the automatic refund |
+| Email | Printed to the terminal and saved to `.data/dev-mail/` |
+| Uploads | Saved to `.data/uploads` |
+
+These fallbacks are for development. Mock payments and the default auth secret only work when `NODE_ENV` is not `production` **and** the site URL is a local address. In production, the app requires `DATABASE_URL` and raises an error without it.
+
+## What has been tested
+
+The project is young, so check the flows you rely on with your own accounts before going live.
+
+| Part | Tested with |
+| --- | --- |
+| Auth, credits, admin, jobs | End-to-end tests against a local server |
+| Waffo | Fake provider tests and a real sandbox run |
+| Stripe, Creem | Fake provider tests only |
+| OpenRouter, fal.ai, R2 | Mock providers only |
+| Production | Not yet deployed to a live site |
+
+## Next steps
+
+- [Quick start](quick-start): run it and open the admin
+- [Configuration](configuration): environment variables and config files
+- [Deployment](deployment): the go-live checklist

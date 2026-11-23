@@ -1,0 +1,111 @@
+export const meta = { title: "Admin", description: "Every admin page and what it's for.", section: "operate", order: 8 };
+
+The admin lives at `/admin`. Non-admins get a 404. See [Authentication](authentication#admins) for how to become one.
+
+## How it's organized
+
+| Layer | Where | Purpose |
+| --- | --- | --- |
+| Push | Bell and email to `ADMIN_EMAILS` | New issues, new refund requests and failed jobs, once each |
+| Needs attention | Top of `/admin` | What needs a person right now |
+| Act | Refunds, Issues, Payments, Jobs | Lists and actions |
+| Investigate | Payment log | The full history of one transaction or user |
+| Operate | Credit ledger, AI calls, Newsletter | Site-wide activity |
+| Launch check | System check | Missing or wrong configuration |
+
+## Pages
+
+### Overview: `/admin`
+
+**Needs attention** lists only what's above zero, and each row links to a filtered list:
+
+- Refunds to review
+- Refunds to issue manually at the provider
+- Error-level issues
+- Disputes
+- Failed scheduled jobs
+- A stopped scheduler
+- Configuration errors
+- Warning-level issues
+- AI calls that failed today
+
+Below that are revenue, key metrics, new users and recent payments.
+
+### Users: `/admin/users`
+
+Search and filter accounts. A user's detail page has tabs for credits, orders, payments, subscriptions, refunds, generations, sessions and admin log.
+
+Actions on the detail page:
+
+- Adjust credits, with a required reason. A deduction can't go below zero.
+- Change role
+- Ban, for a set number of days or permanently, and unban
+- Sign the user out everywhere
+- Delete the account, only if it has never paid
+
+You can't act on yourself, and admins can't be banned or deleted. An admin set through `ADMIN_EMAILS` has to be changed in the environment.
+
+### Payments: `/admin/payments`
+
+- **Received**: money actually collected, including renewals and refund or dispute status
+- **Checkouts**: every payment a user started, including unpaid and expired ones
+
+A one-time purchase appears in both. A renewal is only in Received, and an abandoned checkout is only in Checkouts.
+
+### Subscriptions: `/admin/subscriptions`
+
+Subscriptions by status, with search by email or provider ID and filters for provider and plan.
+
+### Refunds: `/admin/refunds`
+
+Review requests. You can approve, reject, release a hold when a provider refund didn't go through, or retry a failed request. See [Credits and refunds](credits-and-refunds).
+
+### Issues & reconciliation: `/admin/reconciliation`
+
+The issues table plus a daily report per provider and currency. Issues are deduplicated and have a status of Open, Resolved or Ignored.
+
+| Issue | Level | Source |
+| --- | --- | --- |
+| `webhook_error` | Error | A webhook failed while processing |
+| `refund_failed` | Error | A refund request is in a failed state |
+| `balance_mismatch` | Error | Balance differs from the ledger total |
+| `paid_without_credits` | Error | A paid one-time order has no grant |
+| `over_refunded` | Error | More was refunded than paid |
+| `missed_webhook` | Warning | Reconciliation recovered a payment |
+| `webhook_rejected` | Warning | Valid signature, but not for this site |
+| `reconcile_failed` | Warning | Provider queries failed 3 or more times in 24 hours |
+| `refund_stuck` | Warning | Approved over 48 hours ago with no result |
+| `negative_balance` | Warning | A user's balance is below zero |
+
+State issues, such as a balance mismatch, resolve on their own when the condition clears. Event issues stay open until an admin closes them, except that a webhook error resolves if the provider's retry succeeds.
+
+### Credit ledger: `/admin/credits`
+
+Every credit movement on the site, read-only, with totals for the current filter. The balance card is what users currently hold, which is service you still owe them.
+
+### AI calls: `/admin/ai`
+
+Call volume, success rate, failures, stuck jobs, credits, and duration by feature (average and P95). Failed rows include the provider error.
+
+### Scheduled jobs: `/admin/jobs`
+
+Scheduler health, each job's schedule and last result, and run history with logs. You can run a job now, turn it on or off, or change its schedule. See [Scheduled jobs](scheduled-jobs).
+
+### Payment log: `/admin/payment-log`
+
+An append-only record of each step in the payment flow: checkouts, verified webhooks, refund actions and outcomes. Search by email or any ID to see a transaction from start to finish.
+
+### Newsletter: `/admin/newsletter`
+
+View, filter, export and remove subscribers, and compose and send campaigns. See [Newsletter](newsletter).
+
+### System check: `/admin/system`
+
+Shows which settings are missing or wrong and whether migrations have run. See [Deployment](deployment#system-check).
+
+## Working with lists
+
+- The first toolbar row is a date range with presets. Dates are UTC and include both ends.
+- Log-style lists default to the last 7 days. Work queues and entities default to all time.
+- Searching turns off the default date filter, so old records are still found.
+- Search, filters, dates and pages are stored in the URL, so a copied link shows the same view.

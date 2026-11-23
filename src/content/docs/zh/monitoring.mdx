@@ -1,0 +1,86 @@
+export const meta = { title: "错误监控", description: "可选的 Sentry 错误上报：上报什么、去掉什么。", section: "operate", order: 11 };
+
+错误监控是可选的，使用 Sentry。不配 DSN 时，运行时不会加载 SDK，也不会发送任何数据。
+
+## 配置
+
+```bash
+# 服务端错误
+SENTRY_DSN=https://key@example.ingest.sentry.io/1
+
+# 浏览器错误
+NEXT_PUBLIC_SENTRY_DSN=https://key@example.ingest.sentry.io/1
+
+# 可选
+SENTRY_ENVIRONMENT=production
+SENTRY_TRACES_SAMPLE_RATE=0
+```
+
+两个 DSN 可以只配一个，只监控那一端。`NEXT_PUBLIC_SENTRY_DSN` 会打进浏览器代码，改了要重新构建。
+
+| 变量 | 作用范围 | 默认 |
+| --- | --- | --- |
+| `SENTRY_DSN` | 服务端 | 关闭 |
+| `NEXT_PUBLIC_SENTRY_DSN` | 浏览器 | 关闭 |
+| `SENTRY_ENVIRONMENT` | 仅服务端 | `NODE_ENV` |
+| `SENTRY_TRACES_SAMPLE_RATE` | 仅服务端 | 0 |
+
+浏览器事件的环境名固定用 `NODE_ENV`，也不发送性能追踪。
+
+## Source map
+
+想在错误堆栈里看到源码，构建时配置：
+
+```bash
+SENTRY_AUTH_TOKEN=...
+SENTRY_ORG=your-org
+SENTRY_PROJECT=your-project
+```
+
+`next build` 时上传 source map，上传后从构建产物里删除。没有 token 时，构建不会启用 Sentry 插件。
+
+## 上报哪些内容
+
+| 事件 | 级别 |
+| --- | --- |
+| 未捕获的服务端和页面错误 | error |
+| 浏览器错误 | error |
+| 定时任务失败 | error |
+| 支付回调处理出错 | error |
+| AI 调用失败 | warning |
+
+在服务端上报自己捕获的错误：
+
+```ts
+import { captureError } from "@/lib/monitoring";
+
+await captureError(error, { level: "warning", tags: { area: "my-feature" } });
+```
+
+没配 `SENTRY_DSN` 时它什么都不做，监控本身出错也不会影响业务代码。
+
+## 隐私
+
+`src/lib/monitoring-scrub.ts` 会在每个错误事件发出前处理一遍，服务端和浏览器都一样。
+
+**会删除：**
+
+- 用户信息
+- Cookie
+- 请求体
+- 查询参数（查询字段和 URL 里的都删）
+- 除 `User-Agent`、`Content-Type`、`Accept-Language` 以外的所有请求头，所以 Cookie、签名和 `Referer` 都不会发送
+- 面包屑里的附加数据
+
+**会在文字里替换：**
+
+- 邮箱地址替换成 `[email]`
+- Stripe、Resend 等平台的密钥、Bearer token 和私钥替换成 `[secret]`
+
+**仍会发送：** 错误堆栈、URL 路径，以及上面这三个请求头。所以不要把个人信息或 token 放在 URL 路径里。
+
+脱敏靠正则匹配，不可能认出所有密钥，最好一开始就别把敏感值写进错误信息。
+
+## 性能追踪
+
+性能追踪默认关闭。把 `SENTRY_TRACES_SAMPLE_RATE` 调到 0 以上后，性能事件也会经过同样的请求脱敏，但 span 的名称和属性不会改写。开启前请先确认里面有什么内容。

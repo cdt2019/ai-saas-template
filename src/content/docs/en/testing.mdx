@@ -1,0 +1,83 @@
+export const meta = { title: "Testing", description: "Unit tests, the end-to-end smoke test and the payment test suite.", section: "operate", order: 13 };
+
+| Suite | Command | Needs |
+| --- | --- | --- |
+| Unit tests | `npm test` | Nothing |
+| Smoke test | `bash scripts/smoke-test.sh` | A local dev server |
+| Payment tests | `node scripts/payment-test.mjs` | A local dev server |
+
+CI runs lint, typecheck, unit tests and a build. The smoke and payment suites are run by hand.
+
+## Unit tests
+
+```bash
+npm test            # run once
+npm run test:watch  # rerun on change
+```
+
+Tests are in `tests/` and run with Vitest.
+
+| File | Covers |
+| --- | --- |
+| `tests/credit-math.test.ts` | Refund amounts, eligibility, clawbacks and rounding |
+| `tests/credits.test.ts` | Ledger idempotency and concurrent spending, on an in-memory PGlite database |
+| `tests/monitoring-scrub.test.ts` | Removal of emails, keys and request data |
+
+## Smoke test
+
+This walks through the product against a running dev server with mock payments: sign-up, codes, purchases, subscriptions, AI calls, refunds on failure, uploads, permissions and abuse checks.
+
+```bash
+npm run dev
+```
+
+In another terminal:
+
+```bash
+bash scripts/smoke-test.sh http://localhost:3000
+```
+
+Requirements:
+
+- Use the default mock provider, with Resend not configured. The script reads codes from `.data/dev-mail/`.
+- Keep the default `SIGNUP_BONUS_CREDITS` and `LIMIT_AI_PER_USER_MIN`, because the script checks them.
+- It creates new accounts each run. If you hit rate limits, raise `LIMIT_SIGNUP_PER_IP_HOUR` and `LIMIT_OTP_PER_IP_10MIN` in `.env.local`.
+
+## Payment tests
+
+This suite starts a local fake provider that imitates the Waffo, Creem and Stripe APIs and signs webhooks like they do. You don't need any provider accounts.
+
+It covers purchases, subscriptions, full and partial refunds, disputes, refund requests, trials, promo codes, lost webhooks, reconciliation and attacks such as forged signatures and replays.
+
+Run it once per provider:
+
+```bash
+node scripts/payment-test.mjs setup stripe
+```
+
+Restart `npm run dev`, then:
+
+```bash
+node scripts/payment-test.mjs run http://localhost:3000
+```
+
+Repeat with `creem` and `waffo`. When you finish, remove the test configuration and restart the dev server:
+
+```bash
+node scripts/payment-test.mjs cleanup
+```
+
+**Always run cleanup.** `setup` writes `.env.development.local`, which switches the payment provider and overrides `ADMIN_EMAILS`. If you leave it there, the smoke test fails and local payments keep pointing at the fake provider.
+
+Passing these tests shows the template's logic is consistent with the fake provider. It doesn't prove the real APIs behave the same way, so also test in each provider's sandbox.
+
+## Before opening a pull request
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+If you changed auth, credits or payments, run the smoke and payment suites too.

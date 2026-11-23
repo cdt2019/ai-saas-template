@@ -1,0 +1,98 @@
+export const meta = { title: "部署上线", description: "上线检查清单、系统检查页和数据库迁移。", section: "operate", order: 12 };
+
+模板可以部署到 Vercel 或任何 Node.js 环境。它还没有在真实线上站点运行过，也只有 Waffo 跑过真实沙盒，所以每个外部服务都要先用自己的账号测一遍。
+
+## 上线清单
+
+### 1. 数据库
+
+创建一个 Postgres 数据库，比如 Neon 或 Supabase。
+
+```bash
+DATABASE_URL=postgres://...      # 连接池地址
+DATABASE_URL_UNPOOLED=postgres://...  # 直连地址
+```
+
+运行时要用连接池地址：Neon 的主机名带 `-pooler`，Supabase 用 `pooler.supabase.com` 的 6543 端口。线上用了直连地址会在日志里告警。然后[执行迁移](#迁移)。
+
+### 2. 站点和登录
+
+```bash
+NEXT_PUBLIC_SITE_URL=https://example.com
+BETTER_AUTH_URL=https://example.com
+BETTER_AUTH_SECRET=   # openssl rand -base64 32
+```
+
+同时把 `src/config/site.ts` 里的品牌和联系方式换掉。
+
+### 3. 邮件
+
+在 Resend 验证域名，配置 `RESEND_API_KEY` 和 `EMAIL_FROM`。没有邮件，用户无法完成注册。
+
+### 4. 支付
+
+设置 `PAYMENT_PROVIDER`，按[支付](payments)里的步骤配置。准备收真钱时再关闭测试模式。
+
+### 5. AI 和存储
+
+配置 `AI_API_KEY`、`FAL_KEY` 和 5 个 `R2_*` 变量，并给桶配好 CORS。真实生成一次，确认积分价格能覆盖成本。
+
+### 6. 防刷
+
+开放注册前配好两个 Turnstile 密钥。如果访客大多只来一次，可以考虑 `SIGNUP_BONUS_CREDITS=0`。
+
+### 7. 管理员
+
+把你的邮箱加进 `ADMIN_EMAILS`，登录并完成验证。之后看一眼用户列表，确认没有陌生的管理员。
+
+### 8. 定时任务
+
+设置 `CRON_SECRET`，选一种[触发方式](scheduled-jobs#触发方式)，然后确认 `/admin/jobs` 显示调度器正常。
+
+### 9. 可选服务
+
+- [Google 和 GitHub 登录](authentication#google-和-github-登录)
+- [Sentry](monitoring)
+- [Newsletter](newsletter)
+
+### 10. 最后走一遍
+
+1. 打开 `/admin/system`，清掉所有错误。
+2. 用新邮箱注册。
+3. 在支付平台测试模式下买一个积分包和一个订阅。
+4. 确认积分是通过 webhook 到账的。
+5. 申请退款并批准，确认积分和付款状态都更新了。
+6. 把提供的每种 AI 功能都真实跑一次。
+7. 换成生产 key，再做一笔小额购买。
+
+## 系统检查
+
+`/admin/system` 读取环境变量和数据库，报告缺失或不安全的配置。
+
+| 分组 | 检查内容 |
+| --- | --- |
+| 站点 | 对外网址、登录密钥、登录地址、管理员邮箱 |
+| 数据库 | 连接和迁移状态 |
+| 邮件 | Resend、发件地址、邮箱验证设置 |
+| 支付 | 通道、密钥、产品、测试或生产模式、完整的 webhook 地址 |
+| 定时任务 | 触发方式和调度器状态 |
+| AI | 文本、图片、视频的 key，以及 R2 存储 |
+| 防护 | Turnstile、Google、GitHub |
+
+页面只显示变量名，不显示值。它不调用任何外部平台，所以绿色只代表**填了**，不代表 key 有效，仍然要真实走一遍。
+
+线上的配置错误也会出现在概览的「待处理」里。
+
+## 迁移
+
+```bash
+npm run db:generate   # 修改 src/db/schema.ts 之后
+npm run db:migrate    # 应用到数据库
+```
+
+- `db:generate` 把 SQL 写到 `drizzle/`，这些文件要提交。
+- `db:migrate` 优先用 `DATABASE_URL_UNPOOLED`，没有就用 `DATABASE_URL`，要确保命令能读到这个变量。
+- 在新代码开始接流量之前执行。
+- 本地 PGlite 启动时自动迁移，真实的 Postgres 不会。
+
+`/admin/system` 会比较已应用的迁移和仓库里的迁移，有没跑的会标出来。

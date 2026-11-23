@@ -1,0 +1,133 @@
+export const meta = { title: "Configuration", description: "Environment variables by area, plus the site, pricing and AI config files.", section: "start", order: 3 };
+
+Copy `.env.example` to `.env.local` for local work, or set the same variables in your host's dashboard. Everything is optional locally. `/admin/system` shows what's still missing in production.
+
+Variables starting with `NEXT_PUBLIC_` are built into the browser bundle, so never put a secret in one. Changing them requires a rebuild.
+
+## Environment variables
+
+### Site
+
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_SITE_URL` | Public URL, used for canonical links, sitemap, emails and checkout return URLs. Must be `https` in production |
+| `NEXT_PUBLIC_ADSENSE_CLIENT` | AdSense publisher ID. Empty means no ads |
+| `NEXT_PUBLIC_GA_ID` | Google Analytics 4 ID. Empty means no analytics |
+
+### Database
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection used at runtime. In production use the **pooled** address |
+| `DATABASE_URL_UNPOOLED` | Direct connection, preferred by `npm run db:migrate` |
+| `DB_POOL_MAX` | Maximum connections per server instance. Default 5 |
+| `ALLOW_PGLITE` | Set to `true` to try a local `next start` on PGlite. Don't use it on a real deployment |
+
+### Sign-in
+
+| Variable | Purpose |
+| --- | --- |
+| `BETTER_AUTH_SECRET` | Signs sessions. Required in production. Generate with `openssl rand -base64 32` |
+| `BETTER_AUTH_URL` | Auth base URL. Must have the same origin as the site URL |
+| `AUTH_REQUIRE_EMAIL_VERIFICATION` | On unless set to `false` |
+| `SIGNUP_BONUS_CREDITS` | Credits for new users. Default 10. Use 0 on sites with mostly one-time visitors |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in. Shown only when both are set |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in. Shown only when both are set |
+| `ADMIN_EMAILS` | Comma-separated admin addresses. Must be verified to count. Also receives admin alerts |
+
+### Email
+
+| Variable | Purpose |
+| --- | --- |
+| `RESEND_API_KEY` | Sends email through Resend. Without it, email is printed to the terminal |
+| `EMAIL_FROM` | Sender on a domain verified in Resend, for example `YourBrand <hello@example.com>` |
+
+### Payments
+
+| Variable | Purpose |
+| --- | --- |
+| `PAYMENT_PROVIDER` | `stripe`, `creem`, `waffo` or `mock`. Local default is `mock`. Required in production |
+| `PAYMENT_HTTP_TIMEOUT_MS` | Timeout for provider API calls. Default 15000 |
+| `LOW_CREDITS_THRESHOLD` | Notify a user when their balance drops below this. Default 5, 0 turns it off |
+
+Each provider has its own keys. See [Payments](payments).
+
+### Scheduled jobs
+
+| Variable | Purpose |
+| --- | --- |
+| `CRON_SECRET` | Bearer token for `/api/cron/tick`. Generate with `openssl rand -hex 32` |
+| `CRON_MODE` | `internal` runs an in-process timer. Leave empty when an external service calls the tick |
+| `CRON_TICK_MINUTES` | How often you expect a tick. Default 1 with `CRON_MODE=internal`, otherwise 1440 |
+
+### AI and storage
+
+| Variable | Purpose |
+| --- | --- |
+| `AI_API_KEY` | Key for the text API |
+| `AI_BASE_URL` | OpenAI-compatible base URL. Default `https://openrouter.ai/api/v1` |
+| `AI_TEXT_MODEL` | Text model. Default `anthropic/claude-haiku-4.5` |
+| `FAL_KEY` | fal.ai key for images and video |
+| `AI_IMAGE_MODEL` | Image model. Default `fal-ai/flux/schnell` |
+| `AI_VIDEO_MODEL` | Image-to-video model. Default `bytedance/seedance-2.5/us/image-to-video` |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL` | Cloudflare R2 uploads. The bucket needs CORS that allows `PUT` from your domain with a `Content-Type` header |
+
+### Abuse protection
+
+| Variable | Default | Limit |
+| --- | --- | --- |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | none | Turnstile keys. Set both or neither |
+| `LIMIT_SIGNUP_PER_IP_HOUR` | 20 | Sign-ups per IP per hour |
+| `LIMIT_SIGNIN_PER_IP_10MIN` | 20 | Sign-ins per IP per 10 minutes |
+| `LIMIT_OTP_PER_IP_10MIN` | 30 | Code requests and attempts per IP per 10 minutes |
+| `LIMIT_AI_PER_USER_MIN` | 10 | AI calls per user per minute |
+| `LIMIT_AI_PER_IP_MIN` | 30 | AI calls per IP per minute |
+| `LIMIT_UPLOADS_PER_USER_HOUR` | 30 | Uploads per user per hour |
+| `LIMIT_NEWSLETTER_PER_IP_HOUR` | 5 | Newsletter signups per IP per hour |
+
+### Newsletter
+
+| Variable | Purpose |
+| --- | --- |
+| `NEWSLETTER_BATCH_SIZE` | Emails sent per job run. Default 100 |
+
+### Monitoring
+
+| Variable | Purpose |
+| --- | --- |
+| `SENTRY_DSN` | Server error reporting |
+| `NEXT_PUBLIC_SENTRY_DSN` | Browser error reporting |
+| `SENTRY_ENVIRONMENT` | Environment name on server events |
+| `SENTRY_TRACES_SAMPLE_RATE` | Server performance tracing. Default 0 |
+| `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` | Source map upload during the build |
+
+## Config files
+
+### Site: `src/config/site.ts`
+
+Brand name, URL, contact email, Twitter handle, locales and default theme. The first locale is the default and has no URL prefix.
+
+### Pricing: `src/config/pricing.ts`
+
+```ts
+export const plans: Plan[] = [
+  { id: "starter", mode: "one_time", price: 500, currency: "usd", credits: 100, highlight: true },
+  { id: "max", mode: "one_time", price: 4900, currency: "usd", credits: 1500 },
+  { id: "pro", mode: "subscription", price: 1900, currency: "usd", interval: "month", credits: 1000 },
+];
+```
+
+- `price` is in cents.
+- `credits` is the amount per purchase or per billing period.
+- `trialCredits` is what a trial period grants. It defaults to 0.
+- Each plan needs a matching product at your provider, for example `STRIPE_PRICE_STARTER`.
+
+The provider charges the price set on **its** product. The value here is what your pricing page shows, so keep the two in sync.
+
+### AI: `src/config/ai.ts`
+
+One entry per paid feature: model, credit cost and input limit. See [AI features](ai-features).
+
+### Refunds: `src/config/refunds.ts`
+
+The self-service refund policy. See [Credits and refunds](credits-and-refunds).

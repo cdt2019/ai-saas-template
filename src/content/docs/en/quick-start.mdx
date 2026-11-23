@@ -1,0 +1,71 @@
+export const meta = { title: "Quick start", description: "Install the template, run it locally, become an admin and make your first changes.", section: "start", order: 2 };
+
+## Install and run
+
+You need Node.js 22.
+
+```bash
+git clone https://github.com/cdt2019/ai-saas-template.git
+cd ai-saas-template
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. No keys are needed. The database, payments, AI, email and uploads all use [local fallbacks](introduction#local-fallbacks).
+
+## Create an account
+
+1. Go to `/signup` and register with any address, for example `you@example.com`.
+2. Copy the 6-digit code from the terminal. It's also saved in `.data/dev-mail/`.
+3. Enter the code. You're signed in with 10 bonus credits.
+
+## Become an admin
+
+Create `.env.local` in the project root:
+
+```bash
+ADMIN_EMAILS=you@example.com
+```
+
+Restart `npm run dev`, sign in with that address and open `/admin`.
+
+An address in `ADMIN_EMAILS` only counts once it is verified. That stops someone from registering your address first and taking over the admin. If you signed up before adding the variable, your verified account becomes an admin after the restart.
+
+## Try the main flows
+
+| Try | Where |
+| --- | --- |
+| Generate text, an image or a video | `/studio` |
+| Test a failed generation and its refund | Put `__fail__` in the prompt |
+| Buy credits with the mock checkout | `/pricing` |
+| Request a refund | `/settings?tab=billing` |
+| Review the refund | `/admin/refunds` |
+| See what's missing before launch | `/admin/system` |
+
+## First customizations
+
+| Change | File |
+| --- | --- |
+| Name, URL, contact email, languages, default theme | `src/config/site.ts` |
+| Brand colors | Top of `src/app/globals.css` |
+| Logo | `src/components/Logo.tsx` |
+| Site copy | `src/i18n/dictionaries/en.ts` and `zh.ts` |
+| Plans and prices | `src/config/pricing.ts` |
+| AI features, models and credit costs | `src/config/ai.ts` |
+| Refund rules | `src/config/refunds.ts` |
+| Your product | `src/tool/Tool.tsx` and `src/app/[lang]/(app)/studio` |
+
+"Acme" is a placeholder brand. Have the privacy policy and terms reviewed for your business before launch.
+
+## Useful commands
+
+```bash
+npm run dev          # development server
+npm run build        # production build
+npm run lint         # ESLint
+npm run typecheck    # generate route types and run tsc
+npm test             # unit tests
+npm run db:generate  # create a migration after changing the schema
+npm run db:migrate   # apply migrations to DATABASE_URL
+npm run db:studio    # browse the database
+```

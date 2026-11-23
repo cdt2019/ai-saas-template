@@ -1,0 +1,83 @@
+export const meta = { title: "测试", description: "单元测试、端到端冒烟测试和支付测试。", section: "operate", order: 13 };
+
+| 测试 | 命令 | 依赖 |
+| --- | --- | --- |
+| 单元测试 | `npm test` | 无 |
+| 冒烟测试 | `bash scripts/smoke-test.sh` | 本地开发服务器 |
+| 支付测试 | `node scripts/payment-test.mjs` | 本地开发服务器 |
+
+CI 会跑 lint、类型检查、单元测试和构建。冒烟测试和支付测试需要手动运行。
+
+## 单元测试
+
+```bash
+npm test            # 运行一次
+npm run test:watch  # 文件变化时重跑
+```
+
+测试在 `tests/` 目录，用 Vitest 运行。
+
+| 文件 | 覆盖内容 |
+| --- | --- |
+| `tests/credit-math.test.ts` | 退款金额、退款资格、扣回和取整 |
+| `tests/credits.test.ts` | 流水幂等和并发扣费，跑在内存版 PGlite 上 |
+| `tests/monitoring-scrub.test.ts` | 去除邮箱、密钥和请求数据 |
+
+## 冒烟测试
+
+对着运行中的开发服务器，用模拟支付把产品走一遍：注册、验证码、购买、订阅、AI 调用、失败退款、上传、权限和防刷。
+
+```bash
+npm run dev
+```
+
+另开一个终端：
+
+```bash
+bash scripts/smoke-test.sh http://localhost:3000
+```
+
+注意：
+
+- 使用默认的模拟支付，不要配置 Resend，脚本要从 `.data/dev-mail/` 读取验证码。
+- 保持 `SIGNUP_BONUS_CREDITS` 和 `LIMIT_AI_PER_USER_MIN` 的默认值，脚本会检查它们。
+- 每次运行都会新建账号。碰到限流时，在 `.env.local` 里调大 `LIMIT_SIGNUP_PER_IP_HOUR` 和 `LIMIT_OTP_PER_IP_10MIN`。
+
+## 支付测试
+
+脚本会在本地起一个假支付平台，模拟 Waffo、Creem、Stripe 的接口，并按各家规则给回调签名，不需要任何平台账号。
+
+覆盖购买、订阅、全额和部分退款、拒付、退款申请、试用、优惠码、回调丢失、对账，以及伪造签名、重放等攻击。
+
+每个平台跑一次：
+
+```bash
+node scripts/payment-test.mjs setup stripe
+```
+
+重启 `npm run dev`，然后：
+
+```bash
+node scripts/payment-test.mjs run http://localhost:3000
+```
+
+再换成 `creem` 和 `waffo` 各跑一遍。全部结束后清理测试配置，并重启开发服务器：
+
+```bash
+node scripts/payment-test.mjs cleanup
+```
+
+**一定要执行 cleanup。** `setup` 会写入 `.env.development.local`，切换支付通道并覆盖 `ADMIN_EMAILS`。不清理的话，冒烟测试会失败，本地支付也会一直连着假平台。
+
+这些测试通过，只说明模板逻辑和假平台是一致的，不能证明真实接口行为相同，所以还要到各平台的沙盒里测一遍。
+
+## 提交 PR 之前
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+如果改了登录、积分或支付，还要跑冒烟测试和支付测试。

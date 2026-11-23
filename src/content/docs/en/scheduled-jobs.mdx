@@ -1,0 +1,98 @@
+export const meta = { title: "Scheduled jobs", description: "The job registry, the ways to trigger it, and how to add your own job.", section: "operate", order: 9 };
+
+Jobs are registered in code in `src/lib/jobs/registry.ts`. The site exposes one endpoint, `/api/cron/tick`, which runs whatever is due. Something external, or an in-process timer, has to call it.
+
+## Built-in jobs
+
+Schedules are cron expressions in UTC.
+
+| Job | Default schedule | What it does |
+| --- | --- | --- |
+| `payments.pending` | Every 10 minutes | Finds paid orders with no webhook, then checks for payment issues |
+| `newsletter.send` | Every 10 minutes | Sends the next batch of a campaign |
+| `payments.reconcile` | Daily at 03:17 | Compares the last 48 hours with the provider and fills in anything missed |
+| `ledger.check` | Daily at 03:20 | Compares balances with the ledger and looks for over-refunds, stuck refunds and negative balances |
+| `ai.sweep` | Every 10 minutes | Checks AI jobs nobody is polling: finishes ready videos, refunds timed-out or interrupted calls |
+| `cleanup` | Daily at 03:25 | Removes expired rate-limit rows and codes, read notifications over 180 days old, and run records over 90 days old |
+
+## Triggers
+
+### Vercel Cron
+
+`vercel.json` already calls the tick daily at 03:30. Set `CRON_SECRET` and Vercel sends it automatically.
+
+Hobby plans can only run cron once a day, so every job runs at most daily, including the newsletter. On Pro, change the schedule to `*/10 * * * *`.
+
+### GitHub Actions
+
+`.github/workflows/cron.yml` calls the tick every 10 minutes. To enable it, add the variable `SITE_URL` and the secret `CRON_SECRET` in your repository settings.
+
+### Your own server
+
+For a long-running `next start` on a server or in Docker:
+
+```bash
+CRON_MODE=internal
+```
+
+An in-process timer then checks for due jobs once a minute. Don't use this on serverless hosts: `/admin/system` reports it as an error on Vercel.
+
+### Any cron service
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://example.com/api/cron/tick
+```
+
+The endpoint returns 401 without the secret or a signed-in admin.
+
+### Scheduler health
+
+`/admin/jobs` shows when the tick last fired. If it hasn't fired for more than twice the expected interval plus 10 minutes, the admin shows a warning.
+
+Set `CRON_TICK_MINUTES` to match your trigger. The default is 1 with `CRON_MODE=internal`, otherwise 1440. If you call the tick every 10 minutes, set it to 10 so a stopped clock is noticed sooner.
+
+## How a run works
+
+1. A database lock ensures only one copy of a job runs, even across several servers.
+2. A `job_run` row records the trigger, status, duration, summary and logs.
+3. The job runs with its timeout.
+4. On failure, admins are notified. With Sentry configured, the error is reported too.
+
+Due jobs in one tick run one after another. A job that missed several runs catches up with a single run.
+
+## Add a job
+
+Add an entry to `JOBS` in `src/lib/jobs/registry.ts`:
+
+```ts
+{
+  name: "reports.weekly",
+  schedule: "0 6 * * 1", // Mondays at 06:00 UTC
+  timeoutMs: 5 * 60_000,
+  run: async (ctx) => {
+    const sent = await sendWeeklyReport();
+    ctx.log(`sent ${sent} reports`);
+    return { sent };
+  },
+},
+```
+
+It then appears on `/admin/jobs`, where you can run it by hand and change its schedule.
+
+| Context field | Purpose |
+| --- | --- |
+| `ctx.log(line)` | Write to the run log (up to 200 lines) |
+| `ctx.params` | Parameters passed to a manual run |
+| `ctx.trigger` | `tick`, `internal` or `manual` |
+
+Keep these in mind when writing a job:
+
+- **Make it safe to run twice.** A run can be cut off by a crash or platform timeout.
+- **A timeout doesn't stop your code.** The run is marked failed and its lock is released, but the function keeps going until it returns. Pass work in small batches, and check for an already-claimed row before doing anything with side effects.
+- **Respect platform limits.** `/api/cron/tick` allows 300 seconds, but Vercel Hobby caps functions at 60. All due jobs share that time.
+
+## Changing a schedule
+
+On `/admin/jobs`, enter a 5-field cron expression. It's stored in the database and overrides the code default. Clear the field to go back to the default.
+
+A disabled job doesn't run on schedule, but you can still run it manually.

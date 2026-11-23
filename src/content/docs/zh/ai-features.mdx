@@ -1,0 +1,111 @@
+export const meta = { title: "AI 功能", description: "新增付费 AI 功能、扣费、失败处理和异步视频任务。", section: "core", order: 7 };
+
+文本走任意 OpenAI 兼容接口，默认 OpenRouter；图片和视频走 fal.ai。开发环境没配 key 时，三者都返回模拟结果。
+
+真实平台还没有用线上 key 跑过，上线前请逐个自测。
+
+## 新增一个功能
+
+在 `src/config/ai.ts` 的 `aiFeatures` 里加一条：
+
+```ts
+{
+  id: "summarize",
+  kind: "text",
+  cost: 2,
+  model: process.env.AI_TEXT_MODEL ?? "anthropic/claude-haiku-4.5",
+  maxInput: 8000,
+  maxTokens: 800,
+  system: "Summarize the user's text in three short bullet points.",
+},
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 接口请求里用的名字 |
+| `kind` | `text`、`image` 或 `video` |
+| `cost` | 每次调用消耗的积分 |
+| `model` | OpenRouter 或 fal.ai 的模型 ID |
+| `maxInput` | 输入字符数上限 |
+| `maxTokens` | 仅文本：输出上限 |
+| `system` | 仅文本：系统提示词 |
+| `extraInput` | 传给模型的额外参数，比如视频时长、清晰度 |
+
+然后调用对应类型的接口：
+
+```ts
+const res = await fetch("/api/ai/text", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ feature: "summarize", input }),
+});
+```
+
+演示界面在 `src/components/studio/Studio.tsx`，新功能要自己加上去才会显示。在 `/admin/ai` 里，没加名称的功能会直接显示 `id`。
+
+## 接口
+
+| 接口 | 返回 |
+| --- | --- |
+| `POST /api/ai/text` | 流式纯文本，余额在响应头 `X-Credits-Balance` |
+| `POST /api/ai/image` | `url`、`balance`、`id` |
+| `POST /api/ai/video` | `id`、`balance`，任务在后台继续跑 |
+| `GET /api/ai/generations/[id]` | 查询生成状态 |
+
+所有接口都经过 `src/lib/ai/guard.ts` 的 `guardAiRequest`：检查登录、功能、输入长度，以及按用户和 IP 的限流。
+
+## 扣费
+
+流程在 `src/lib/ai/billing.ts`：
+
+1. `beginGeneration` 先扣积分并写一条 `pending` 记录。积分不足时接口返回 402，不调用模型。
+2. 调用模型。
+3. 成功时 `succeedGeneration` 保存结果；失败时 `failGeneration` 记录错误并退积分。
+
+先扣后调，并发请求就没法超额消费。
+
+积分价格要按真实成本定：先跑一次，看平台实际收了多少钱，售价至少定到成本的 3 倍，留出支付手续费、失败重试和免费额度的空间。
+
+## 失败处理
+
+| 情况 | 积分 |
+| --- | --- |
+| 积分不足 | 不扣 |
+| 模型还没输出就失败 | 退回 |
+| 文本流输出到一半失败 | 退回，流末尾带错误标记 |
+| 用户在有输出之前断开 | 退回 |
+| 用户在有输出之后断开 | 照常扣费 |
+| 图片生成失败 | 退回，接口返回 502 |
+| 视频提交失败 | 退回，接口返回 502 |
+| 视频生成失败或超时 | 退回 |
+
+失败的调用会显示在 `/admin/ai`，并计入概览「待处理」的今日数量。配了 Sentry 时也会作为 warning 上报。
+
+本地测试时，在提示词里带上 `__fail__` 就行。
+
+## 视频
+
+图生视频通常要几分钟，所以走异步任务。
+
+1. 浏览器通过 `/api/upload` 上传图片。
+2. `POST /api/ai/video` 扣积分并把任务提交到 fal 队列。
+3. 状态靠浏览器轮询更新，线上还有 fal 回调。
+4. 成功后给用户发邮件和站内通知；失败或超过 20 分钟则退回积分。
+
+输入图片必须是用户自己上传的 PNG、JPEG 或 WebP。上传接口也接受 GIF，但视频接口会拒绝。
+
+只有 `NEXT_PUBLIC_SITE_URL` 是公网 `https` 地址时才会传 fal 回调。回调地址带签名，模板只把它当作「去查一下」的信号，结果以自己用 key 查到的为准。
+
+用户离开、回调也没到时，定时任务 `ai.sweep`（每 10 分钟）会去平台查询：已完成的视频结单，超过 20 分钟的自动退积分。进程崩溃后停在 `pending` 的文本、图片调用也会退款。
+
+### 换模型
+
+不同模型的输入字段不一样。先看 fal 模型页的 API 文档，再改 `extraInput`：
+
+```ts
+extraInput: { duration: "5", resolution: "720p" },
+```
+
+时长和清晰度直接决定成本，改了之后要重新核对 `cost`。
+
+fal 返回的视频地址在 fal 的存储上，需要长期保留就转存到 R2。

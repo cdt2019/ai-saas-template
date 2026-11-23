@@ -1,0 +1,133 @@
+export const meta = { title: "配置", description: "按模块整理的环境变量，以及站点、价格、AI 配置文件。", section: "start", order: 3 };
+
+本地开发把 `.env.example` 复制成 `.env.local`，线上在部署平台后台填同样的变量。本地所有变量都可以不填，线上还缺什么可以看 `/admin/system`。
+
+`NEXT_PUBLIC_` 开头的变量会打进浏览器代码，不能放密钥，改了也要重新构建才生效。
+
+## 环境变量
+
+### 站点
+
+| 变量 | 作用 |
+| --- | --- |
+| `NEXT_PUBLIC_SITE_URL` | 对外网址，用于 canonical、sitemap、邮件和支付跳转；线上必须是 `https` |
+| `NEXT_PUBLIC_ADSENSE_CLIENT` | AdSense 发布商 ID，留空不加载广告 |
+| `NEXT_PUBLIC_GA_ID` | Google Analytics 4 ID，留空不加载统计 |
+
+### 数据库
+
+| 变量 | 作用 |
+| --- | --- |
+| `DATABASE_URL` | 运行时用的 Postgres 连接，线上要填**连接池**地址 |
+| `DATABASE_URL_UNPOOLED` | 直连地址，`npm run db:migrate` 优先用它 |
+| `DB_POOL_MAX` | 每个服务实例的最大连接数，默认 5 |
+| `ALLOW_PGLITE` | 设为 `true` 时可以在本机用 PGlite 试跑 `next start`，正式部署不要用 |
+
+### 登录
+
+| 变量 | 作用 |
+| --- | --- |
+| `BETTER_AUTH_SECRET` | 会话签名密钥，线上必填，用 `openssl rand -base64 32` 生成 |
+| `BETTER_AUTH_URL` | 登录服务地址，必须和站点地址同源 |
+| `AUTH_REQUIRE_EMAIL_VERIFICATION` | 默认开启，填 `false` 才关闭 |
+| `SIGNUP_BONUS_CREDITS` | 新用户赠送积分，默认 10；用户多为一次性访问的站建议设为 0 |
+| `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` | Google 登录，两个都填才显示 |
+| `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET` | GitHub 登录，两个都填才显示 |
+| `ADMIN_EMAILS` | 管理员邮箱，逗号分隔，必须已验证；后台提醒邮件也发到这里 |
+
+### 邮件
+
+| 变量 | 作用 |
+| --- | --- |
+| `RESEND_API_KEY` | 通过 Resend 发信；不填时邮件打印到终端 |
+| `EMAIL_FROM` | 发件人，域名要在 Resend 验证过，比如 `YourBrand <hello@example.com>` |
+
+### 支付
+
+| 变量 | 作用 |
+| --- | --- |
+| `PAYMENT_PROVIDER` | `stripe`、`creem`、`waffo` 或 `mock`；本地默认 `mock`，线上必填 |
+| `PAYMENT_HTTP_TIMEOUT_MS` | 调支付平台接口的超时，默认 15000 |
+| `LOW_CREDITS_THRESHOLD` | 余额跌破多少提醒用户，默认 5，0 表示关闭 |
+
+各平台自己的密钥见[支付](payments)。
+
+### 定时任务
+
+| 变量 | 作用 |
+| --- | --- |
+| `CRON_SECRET` | 调用 `/api/cron/tick` 的 Bearer 密钥，用 `openssl rand -hex 32` 生成 |
+| `CRON_MODE` | `internal` 表示开进程内定时器；由外部服务调用时留空 |
+| `CRON_TICK_MINUTES` | 预期多久触发一次；`CRON_MODE=internal` 时默认 1，否则默认 1440 |
+
+### AI 和存储
+
+| 变量 | 作用 |
+| --- | --- |
+| `AI_API_KEY` | 文本接口的 key |
+| `AI_BASE_URL` | OpenAI 兼容接口地址，默认 `https://openrouter.ai/api/v1` |
+| `AI_TEXT_MODEL` | 文本模型，默认 `anthropic/claude-haiku-4.5` |
+| `FAL_KEY` | fal.ai 的 key，用于图片和视频 |
+| `AI_IMAGE_MODEL` | 图片模型，默认 `fal-ai/flux/schnell` |
+| `AI_VIDEO_MODEL` | 图生视频模型，默认 `bytedance/seedance-2.5/us/image-to-video` |
+| `R2_ACCOUNT_ID`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`R2_BUCKET`、`R2_PUBLIC_URL` | Cloudflare R2 上传；桶的 CORS 要允许你的域名 `PUT`，并允许 `Content-Type` 请求头 |
+
+### 防刷
+
+| 变量 | 默认值 | 限制 |
+| --- | --- | --- |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY`、`TURNSTILE_SECRET_KEY` | 无 | Turnstile 密钥，要么都填，要么都不填 |
+| `LIMIT_SIGNUP_PER_IP_HOUR` | 20 | 每 IP 每小时注册次数 |
+| `LIMIT_SIGNIN_PER_IP_10MIN` | 20 | 每 IP 每 10 分钟登录次数 |
+| `LIMIT_OTP_PER_IP_10MIN` | 30 | 每 IP 每 10 分钟发送和输入验证码次数 |
+| `LIMIT_AI_PER_USER_MIN` | 10 | 每用户每分钟 AI 调用次数 |
+| `LIMIT_AI_PER_IP_MIN` | 30 | 每 IP 每分钟 AI 调用次数 |
+| `LIMIT_UPLOADS_PER_USER_HOUR` | 30 | 每用户每小时上传次数 |
+| `LIMIT_NEWSLETTER_PER_IP_HOUR` | 5 | 每 IP 每小时 Newsletter 订阅次数 |
+
+### Newsletter
+
+| 变量 | 作用 |
+| --- | --- |
+| `NEWSLETTER_BATCH_SIZE` | 每次任务发送多少封，默认 100 |
+
+### 监控
+
+| 变量 | 作用 |
+| --- | --- |
+| `SENTRY_DSN` | 服务端错误上报 |
+| `NEXT_PUBLIC_SENTRY_DSN` | 浏览器错误上报 |
+| `SENTRY_ENVIRONMENT` | 服务端事件的环境名 |
+| `SENTRY_TRACES_SAMPLE_RATE` | 服务端性能追踪采样率，默认 0 |
+| `SENTRY_AUTH_TOKEN`、`SENTRY_ORG`、`SENTRY_PROJECT` | 构建时上传 source map |
+
+## 配置文件
+
+### 站点：`src/config/site.ts`
+
+品牌名、网址、联系邮箱、Twitter、语言和默认主题。排在第一个的语言是默认语言，URL 不带前缀。
+
+### 价格：`src/config/pricing.ts`
+
+```ts
+export const plans: Plan[] = [
+  { id: "starter", mode: "one_time", price: 500, currency: "usd", credits: 100, highlight: true },
+  { id: "max", mode: "one_time", price: 4900, currency: "usd", credits: 1500 },
+  { id: "pro", mode: "subscription", price: 1900, currency: "usd", interval: "month", credits: 1000 },
+];
+```
+
+- `price` 单位是分。
+- `credits` 是每次购买或每个订阅周期发放的积分。
+- `trialCredits` 是试用期发放的积分，默认 0。
+- 每个方案都要在支付平台建对应的产品，比如 `STRIPE_PRICE_STARTER`。
+
+实际扣款金额以支付平台**产品上的价格**为准，这里的 `price` 是价格页显示的数字，两边要保持一致。
+
+### AI：`src/config/ai.ts`
+
+每个付费功能一条：模型、积分价格、输入上限。详见 [AI 功能](ai-features)。
+
+### 退款：`src/config/refunds.ts`
+
+自助退款规则，详见[积分与退款](credits-and-refunds)。
